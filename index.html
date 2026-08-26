@@ -699,6 +699,26 @@
     // on top of the carbine bone's rest pose, instead of copying the
     // absolute value across. carbineRestQuats must be captured once, right
     // after the carbine loads and before anything ever animates it.
+    // Every one of these clips directly animates the gun's OWN root node
+    // (translation + rotation), not just its internal moving parts (bolt,
+    // pump, trigger, etc). That fights with GUN_TRANSFORMS -- every time the
+    // mixer evaluates the clip (including the frozen idle pose, and every
+    // fresh fire/reload playback), it overwrites the manually-calibrated
+    // root position with whatever the original animation authored. Stripping
+    // those specific tracks leaves GUN_TRANSFORMS as the only thing
+    // controlling root position, while the gun's actual moving parts keep
+    // animating normally. (The game already has its own procedural
+    // recoil/kick system on gunGroup itself, so losing the authored whole-
+    // gun recoil motion isn't a real loss.)
+    function stripNodeTracks(clip, excludeNodeNames, newName) {
+      const exclude = new Set(excludeNodeNames);
+      const filteredTracks = clip.tracks.filter(track => {
+        const parsed = THREE.PropertyBinding.parseTrackName(track.name);
+        return !exclude.has(parsed.nodeName);
+      });
+      return new THREE.AnimationClip(newName || clip.name, clip.duration, filteredTracks);
+    }
+
     function retargetClip(sourceRoot, sourceClip, boneRemap, newName) {
       const newTracks = sourceClip.tracks.map(track => {
         const parsed = THREE.PropertyBinding.parseTrackName(track.name);
@@ -831,8 +851,8 @@
           if (obj.isBone || obj.type === 'Bone') carbineRestQuats[obj.name] = obj.quaternion.clone();
         });
 
-        weaponClips[carbineConfig.type] = gltf.animations[0]; // carbine's own clip, no retargeting needed
-        buildActionClips(carbineConfig.type, gltf.animations[0]);
+        weaponClips[carbineConfig.type] = stripNodeTracks(gltf.animations[0], ['carbine'], 'ar_clip');
+        buildActionClips(carbineConfig.type, weaponClips[carbineConfig.type]);
         mixer = new THREE.AnimationMixer(rigRoot);
 
         applyGunTransform('ar');
@@ -849,7 +869,8 @@
               if (!gunNode) { console.warn(`Could not find gun root node "${gunRootName}" in ${w.modelPath}`); return; }
 
               const boneRemap = buildBoneRemap(gltf2.scene, carbineRoot);
-              weaponClips[w.type] = retargetClip(gltf2.scene, gltf2.animations[0], boneRemap, w.type + '_retargeted');
+              const filteredClip = stripNodeTracks(gltf2.animations[0], [gunRootName], w.type + '_filtered');
+              weaponClips[w.type] = retargetClip(gltf2.scene, filteredClip, boneRemap, w.type + '_retargeted');
               buildActionClips(w.type, weaponClips[w.type]);
 
               rigRoot.attach(gunNode); // .attach() preserves world transform across the reparent
